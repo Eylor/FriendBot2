@@ -1,0 +1,13 @@
+# FriendBot2's own dependencies.
+discord.py>=2.4.0
+python-dotenv>=1.0.0
+
+# The image backend imports the local flux/generate.py, which needs torch,
+# diffusers, transformers, bitsandbytes, etc. Those are NOT listed here — install
+# them from the flux repo so the versions match the GPU/CUDA setup there:
+#
+#   cd ../flux && bash setup.sh           # creates flux/.venv with the FLUX deps
+#   source ../flux/.venv/bin/activate
+#   pip install -r requirements.txt       # add discord.py + python-dotenv on top
+#
+# See README.md for details.
