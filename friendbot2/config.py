@@ -99,6 +99,16 @@ LLM_TEMPERATURE = float(os.environ.get("FRIENDBOT_LLM_TEMPERATURE", "0.9"))
 LLM_TOP_P = float(os.environ.get("FRIENDBOT_LLM_TOP_P", "0.95"))
 LLM_CONTEXT_TOKENS = int(os.environ.get("FRIENDBOT_LLM_CONTEXT_TOKENS", "1536"))
 
+# Repetition penalty (1.0 = off). HF applies it to prompt tokens too, so high
+# values discourage engaging the question's own words — keep this gentle.
+LLM_REPETITION_PENALTY = float(
+    os.environ.get("FRIENDBOT_LLM_REPETITION_PENALTY", "1.05")
+)
+
+# Block newlines/EOS for the first N generated tokens so a reply gets at least
+# a sentence out before the one-line cut can end it. 0 disables.
+LLM_MIN_REPLY_TOKENS = int(os.environ.get("FRIENDBOT_LLM_MIN_REPLY_TOKENS", "12"))
+
 # How many recent channel messages to keep as the chat transcript context.
 CHAT_CONTEXT_MESSAGES = int(os.environ.get("FRIENDBOT_CHAT_CONTEXT", "25"))
 

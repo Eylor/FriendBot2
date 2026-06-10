@@ -45,6 +45,8 @@ class FriendBot(commands.Bot):
                 max_new_tokens=config.LLM_MAX_NEW_TOKENS,
                 temperature=config.LLM_TEMPERATURE,
                 top_p=config.LLM_TOP_P,
+                repetition_penalty=config.LLM_REPETITION_PENALTY,
+                min_reply_tokens=config.LLM_MIN_REPLY_TOKENS,
             )
             await self.add_cog(ChatCog(self, self.backend))
         else:

@@ -37,6 +37,8 @@ class LLMBackend:
         max_new_tokens: int = 120,
         temperature: float = 0.9,
         top_p: float = 0.95,
+        repetition_penalty: float = 1.05,
+        min_reply_tokens: int = 12,
     ):
         self.base_model = base_model
         self.adapter_path = Path(adapter_path) if adapter_path else None
@@ -45,8 +47,11 @@ class LLMBackend:
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.repetition_penalty = repetition_penalty
+        self.min_reply_tokens = min_reply_tokens
         self._model = None
         self._tokenizer = None
+        self._newline_token_ids: list[int] = []
         # max_workers=1 keeps every torch call on the same thread and serializes
         # GPU access, exactly like FluxBackend.
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm")
@@ -74,6 +79,14 @@ class LLMBackend:
         tokenizer.truncation_side = "left"
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
+        # Token ids whose text contains a newline ("Ċ" is the byte-level BPE
+        # spelling of \n in Llama-3/GPT-2 vocabs). Suppressed at the start of a
+        # reply so the one-line cut can't end it after a word or two.
+        self._newline_token_ids = [
+            tid
+            for tok, tid in tokenizer.get_vocab().items()
+            if "Ċ" in tok or "\n" in tok
+        ]
 
         model = AutoModelForCausalLM.from_pretrained(self.base_model, **kwargs)
 
@@ -104,6 +117,7 @@ class LLMBackend:
     # -- generation ---------------------------------------------------------
     def _chat(self, transcript_lines: list[str], persona: str) -> str:
         import torch
+        from transformers import LogitsProcessorList
 
         prompt = "\n".join([*transcript_lines, f"{persona}:"])
         inputs = self._tokenizer(
@@ -113,6 +127,20 @@ class LLMBackend:
             max_length=self.context_tokens,
         ).to(self._model.device)
 
+        gen_kwargs = {}
+        if self.min_reply_tokens > 0 and self._newline_token_ids:
+            prompt_len = inputs["input_ids"].shape[1]
+            newline_ids = self._newline_token_ids
+            min_tokens = self.min_reply_tokens
+
+            def _no_early_newline(input_ids, scores):
+                if input_ids.shape[1] - prompt_len < min_tokens:
+                    scores[:, newline_ids] = float("-inf")
+                return scores
+
+            gen_kwargs["logits_processor"] = LogitsProcessorList([_no_early_newline])
+            gen_kwargs["min_new_tokens"] = self.min_reply_tokens  # blocks early EOS
+
         with torch.no_grad():
             output = self._model.generate(
                 **inputs,
@@ -120,8 +148,9 @@ class LLMBackend:
                 do_sample=True,
                 temperature=self.temperature,
                 top_p=self.top_p,
-                repetition_penalty=1.1,
+                repetition_penalty=self.repetition_penalty,
                 pad_token_id=self._tokenizer.pad_token_id,
+                **gen_kwargs,
             )
 
         completion = self._tokenizer.decode(

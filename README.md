@@ -136,6 +136,8 @@ $EDITOR .env
 | `FRIENDBOT_PERSONA` | most active user | Whose style to mimic. |
 | `FRIENDBOT_LLM_4BIT` | `true` | NF4-quantize the LLM (disable for CPU tests). |
 | `FRIENDBOT_LLM_MAX_NEW_TOKENS` / `_TEMPERATURE` / `_TOP_P` / `_CONTEXT_TOKENS` | `120` / `0.9` / `0.95` / `1536` | Sampling and context budget. |
+| `FRIENDBOT_LLM_REPETITION_PENALTY` | `1.05` | Repetition penalty; 1.0 disables. Penalizes prompt tokens too, so keep gentle. |
+| `FRIENDBOT_LLM_MIN_REPLY_TOKENS` | `12` | Newline/EOS blocked for the first N tokens of each reply; 0 disables. |
 | `FRIENDBOT_CHAT_CONTEXT` | `25` | Recent messages kept as transcript context. |
 | `FRIENDBOT_PREFIX` | `!` | Prefix for classic text commands. |
 | `FRIENDBOT_GUILD_ID` | — | Guild id for instant slash-command sync (dev). |
