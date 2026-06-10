@@ -26,6 +26,8 @@ from .llm_backend import LLMBackend
 log = logging.getLogger(__name__)
 
 _CUSTOM_EMOJI = re.compile(r"<a?(:\w+:)\d+>")
+# The "[Persona] " tag we prepend to our own replies (see _respond).
+_PERSONA_TAG = re.compile(r"^\[[^\]\n]+\]\s*")
 
 
 def _normalize(text: str) -> str:
@@ -87,6 +89,10 @@ class ChatCog(commands.Cog):
         if message.author.bot and message.author != self.bot.user:
             return None
         text = _normalize(message.clean_content)
+        if message.author == self.bot.user:
+            # Strip the "[Persona] " tag off our own replies so the transcript
+            # stays in the plain "Name: message" format the model was trained on.
+            text = _PERSONA_TAG.sub("", text)
         # Drop the bot's own @mention so the model doesn't learn to echo pings.
         me = message.guild.me if message.guild else self.bot.user
         if me is not None:
@@ -165,7 +171,7 @@ class ChatCog(commands.Cog):
         try:
             async with message.channel.typing():
                 reply = await self.backend.chat(list(dq), persona)
-            await message.reply(reply)
+            await message.reply(f"[{persona}] {reply}")
         except Exception:  # noqa: BLE001
             log.exception("Chat generation failed.")
             try:
