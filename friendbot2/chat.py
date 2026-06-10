@@ -27,6 +27,8 @@ from .llm_backend import LLMBackend
 log = logging.getLogger(__name__)
 
 _CUSTOM_EMOJI = re.compile(r"<a?(:\w+:)\d+>")
+# Bare :name: shortcodes the model emits (training data stores emoji this way).
+_EMOJI_SHORTCODE = re.compile(r":(\w+):")
 # The "[Persona] " tag we prepend to our own replies (see _respond).
 _PERSONA_TAG = re.compile(r"^\[([^\]\n]+)\]\s*")
 
@@ -110,6 +112,30 @@ class ChatCog(commands.Cog):
         if self.persona == RANDOM_PERSONA:
             return self.bot.user.display_name if self.bot.user else "FriendBot"
         return self._persona_label()
+
+    def _render_emoji(self, text: str, guild: discord.Guild | None) -> str:
+        """Turn :name: shortcodes into real custom emoji where one exists.
+
+        The model emits emoji in the bare :name: form it was trained on;
+        Discord only renders the full <:name:id> form from bots. Names that
+        don't match any visible emoji (hallucinated, deleted, or plain-unicode
+        shortcodes) are left as text, which is how they read in training too.
+        """
+
+        def replace(match: re.Match) -> str:
+            name = match.group(1)
+            pools = (guild.emojis if guild else ()), self.bot.emojis
+            for pool in pools:
+                emoji = discord.utils.get(pool, name=name)
+                if emoji is None:  # tolerate the model changing case
+                    emoji = discord.utils.find(
+                        lambda e: e.name.lower() == name.lower(), pool
+                    )
+                if emoji is not None:
+                    return str(emoji)
+            return match.group(0)
+
+        return _EMOJI_SHORTCODE.sub(replace, text)
 
     def _line_for(self, message: discord.Message) -> str | None:
         """Render a message as a transcript line, or None if it shouldn't appear."""
@@ -198,6 +224,7 @@ class ChatCog(commands.Cog):
         try:
             async with message.channel.typing():
                 reply = await self.backend.chat(list(dq), persona)
+            reply = self._render_emoji(reply, message.guild)
             await message.reply(f"[{persona}] {reply}")
         except Exception:  # noqa: BLE001
             log.exception("Chat generation failed.")
