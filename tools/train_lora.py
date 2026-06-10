@@ -11,7 +11,13 @@ saved; the bot loads it on top of the same base model at inference time.
 Usage:
   python tools/train_lora.py                                # defaults
   python tools/train_lora.py --base meta-llama/Llama-3.2-3B --epochs 2
-  python tools/train_lora.py --batch-size 2 --grad-accum 8  # if VRAM is tight
+  python tools/train_lora.py --batch-size 2 --grad-accum 8  # if you have headroom
+
+Memory notes for 12 GB cards: Llama-3's 128k vocab makes the logits tensor the
+peak allocation (~250 MB per sample at 1024 tokens, more in backward), so
+per-device batch size is the main VRAM lever — gradient accumulation keeps the
+effective batch size without the memory cost. Defaults here (batch 1 x accum 16)
+fit alongside a desktop session.
 
 Gated models (Llama, Gemma) need a one-time `hf auth login` after accepting
 the license on huggingface.co. Free VRAM first — stop the image bot.
@@ -20,7 +26,12 @@ the license on huggingface.co. Free VRAM first — stop the image bot.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+
+# Reduces VRAM fragmentation; must be set before torch is imported (same as
+# flux/generate.py). Without it, "reserved but unallocated" memory piles up.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,8 +44,8 @@ def main() -> None:
     parser.add_argument("--out", type=Path,
                         default=REPO_ROOT / "models" / "adapters" / "friendbot-lora")
     parser.add_argument("--epochs", type=float, default=2.0)
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--grad-accum", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=16)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--max-length", type=int, default=1024,
                         help="Training sequence length in tokens")
@@ -93,14 +104,20 @@ def main() -> None:
         output_dir=str(args.out),
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
+        # Eval would otherwise default to batch 8 and OOM at the epoch boundary.
+        per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
         warmup_steps=20,
         max_length=args.max_length,
-        packing=True,
+        # Samples from build_dataset.py are already ~max_length tokens, so
+        # packing gains almost nothing — and without flash-attn it risks
+        # cross-attention between packed samples (TRL warns about this).
+        packing=False,
         dataset_text_field="text",
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         optim="paged_adamw_8bit",
         bf16=True,
         logging_steps=20,
