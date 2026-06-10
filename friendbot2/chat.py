@@ -15,6 +15,7 @@ import json
 import logging
 import re
 from collections import deque
+from random import choice
 
 import discord
 from discord import app_commands
@@ -27,7 +28,10 @@ log = logging.getLogger(__name__)
 
 _CUSTOM_EMOJI = re.compile(r"<a?(:\w+:)\d+>")
 # The "[Persona] " tag we prepend to our own replies (see _respond).
-_PERSONA_TAG = re.compile(r"^\[[^\]\n]+\]\s*")
+_PERSONA_TAG = re.compile(r"^\[([^\]\n]+)\]\s*")
+
+# Pseudo-persona: pick a random listed persona for each reply.
+RANDOM_PERSONA = "randomized"
 
 
 def _normalize(text: str) -> str:
@@ -44,7 +48,10 @@ class ChatCog(commands.Cog):
         self.backend = backend
         # channel id -> deque of "Name: message" lines
         self.transcripts: dict[int, deque[str]] = {}
-        self.persona: str | None = config.PERSONA or None
+        configured = config.PERSONA or None
+        if configured and configured.lower() == RANDOM_PERSONA:
+            configured = RANDOM_PERSONA
+        self.persona: str | None = configured
         self.persona_counts: dict[str, int] = {}
         self.known_personas: list[str] = []
         self._loader: asyncio.Task | None = None
@@ -96,14 +103,27 @@ class ChatCog(commands.Cog):
             return self.persona
         return self.bot.user.display_name if self.bot.user else "FriendBot"
 
+    def _resolve_reply_persona(self) -> str:
+        """The persona to use for one reply (rolls the dice in randomized mode)."""
+        if self.persona == RANDOM_PERSONA and self.known_personas:
+            return choice(self.known_personas)
+        if self.persona == RANDOM_PERSONA:
+            return self.bot.user.display_name if self.bot.user else "FriendBot"
+        return self._persona_label()
+
     def _line_for(self, message: discord.Message) -> str | None:
         """Render a message as a transcript line, or None if it shouldn't appear."""
         if message.author.bot and message.author != self.bot.user:
             return None
         text = _normalize(message.clean_content)
+        name = message.author.display_name
         if message.author == self.bot.user:
-            # Strip the "[Persona] " tag off our own replies so the transcript
-            # stays in the plain "Name: message" format the model was trained on.
+            # Our own replies carry a "[Persona] " tag: recover who "spoke"
+            # from it (the current persona may differ, e.g. randomized mode)
+            # and strip it so the transcript stays in the plain
+            # "Name: message" format the model was trained on.
+            tag = _PERSONA_TAG.match(text)
+            name = tag.group(1) if tag else self._persona_label()
             text = _PERSONA_TAG.sub("", text)
         # Drop the bot's own @mention so the model doesn't learn to echo pings.
         me = message.guild.me if message.guild else self.bot.user
@@ -111,11 +131,6 @@ class ChatCog(commands.Cog):
             text = text.replace(f"@{me.display_name}", "").strip()
         if not text or text.startswith(config.COMMAND_PREFIX):
             return None
-        name = (
-            self._persona_label()
-            if message.author == self.bot.user
-            else message.author.display_name
-        )
         return f"{name}: {text}"
 
     async def _transcript(
@@ -179,7 +194,7 @@ class ChatCog(commands.Cog):
                 "I'm still waking up — give me a minute and ping me again."
             )
             return
-        persona = self._persona_label()
+        persona = self._resolve_reply_persona()
         try:
             async with message.channel.typing():
                 reply = await self.backend.chat(list(dq), persona)
@@ -201,6 +216,10 @@ class ChatCog(commands.Cog):
             await ctx.reply(f"I'm currently chatting as **{self._persona_label()}**.")
             return
         name = name.strip()
+        if name.lower() == RANDOM_PERSONA:
+            self.persona = RANDOM_PERSONA
+            await ctx.reply("Okay, I'll do a different impression for each message.")
+            return
         if (
             self.persona_counts
             and self.persona_counts.get(name, 0) < config.PERSONA_WARN_MESSAGES
@@ -224,4 +243,5 @@ class ChatCog(commands.Cog):
             )
             return
         listing = "\n".join(f"- {name}" for name in self.known_personas[:15])
+        listing += f"\n- {RANDOM_PERSONA} (someone different each message)"
         await ctx.reply(f"People I can do an impression of:\n{listing}")

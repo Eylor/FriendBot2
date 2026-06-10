@@ -64,7 +64,8 @@ pip install -r requirements.txt
 
 Chat mode runs a small local LLM fine-tuned on your server's own chat history so
 it can talk like the people in it. @Mention the bot (or reply to it) and it
-answers in character; `/persona <name>` switches whose style it mimics and
+answers in character; `/persona <name>` switches whose style it mimics
+(`/persona randomized` picks a different listed persona for every message) and
 `/personas` lists who it knows.
 
 ### Model and runtime choice
