@@ -1,24 +1,32 @@
 # FriendBot2
 
-A Discord bot that generates images from text prompts using a local diffusion
-pipeline — [Stable Diffusion 3.5 Large Turbo](https://huggingface.co/stabilityai/stable-diffusion-3.5-large-turbo)
-by default, or [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell).
+A Discord bot with two GPU personalities, one at a time (they don't fit in a
+12 GB RTX 3080 together):
+
+- **Image mode** (default) — generates images from text prompts with a local
+  diffusion pipeline: [Stable Diffusion 3.5 Large Turbo](https://huggingface.co/stabilityai/stable-diffusion-3.5-large-turbo)
+  by default, or [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell).
+- **Chat mode** — chats in the style of the people on your server, using a
+  small local LLM QLoRA-fine-tuned on the server's own message history.
+
+```bash
+python -m friendbot2          # image mode
+python -m friendbot2 chat     # chat mode
+```
 
 This is a ground-up rewrite of the original FriendBot:
 
-- **Modern Discord API** — discord.py 2.x with slash commands (`/artistic`) and
-  classic prefix commands (`!artistic`) via hybrid commands, gateway intents, an
-  async `setup_hook`, and `await bot.add_cog(...)`.
+- **Modern Discord API** — discord.py 2.x with slash commands and classic
+  prefix commands via hybrid commands, gateway intents, an async `setup_hook`,
+  and `await bot.add_cog(...)`.
 - **Local diffusion instead of the old Stable Diffusion subprocess** — image
   generation calls the local [`flux/generate.py`](../flux/generate.py) script's
   `load_pipeline` / `generate` functions directly, keeping the model resident in
   process for fast turnaround instead of shelling out and reloading weights per
   prompt. The model is selected with `FRIENDBOT_MODEL` (`sd35` default, or
   `flux`), the same choice as generate.py's `--model` flag.
-- **No text-model machinery** — all chat-history collection and text-model
-  training/fine-tuning code (and its data files) from the original were dropped.
 
-## How it works
+## Image mode
 
 `/artistic <prompt>` puts your prompt on a bounded queue. A single background
 worker pulls prompts one at a time and runs the model on a dedicated thread (so
@@ -52,6 +60,61 @@ cd ../FriendBot2
 pip install -r requirements.txt
 ```
 
+## Chat mode
+
+Chat mode runs a small local LLM fine-tuned on your server's own chat history so
+it can talk like the people in it. @Mention the bot (or reply to it) and it
+answers in character; `/persona <name>` switches whose style it mimics and
+`/personas` lists who it knows.
+
+### Model and runtime choice
+
+- **Base model:** `meta-llama/Llama-3.2-3B` (the *base* checkpoint, not
+  Instruct). Mimicry from raw chat logs is a text-continuation task, so the bot
+  is trained and prompted completion-style on plain `Name: message` transcripts —
+  a base model fits that naturally, with no chat-template gymnastics. 3B
+  QLoRA-trains comfortably on a 12 GB RTX 3080 (~7 GB peak) and leaves headroom
+  for a desktop. `meta-llama/Llama-3.1-8B` also works (set `--base` when
+  training and `FRIENDBOT_LLM_BASE` when running; expect to drop
+  `--batch-size` to 1–2). GPT-OSS was ruled out: its smallest release (20B)
+  wants ~16 GB. Llama/Gemma repos are gated on Hugging Face — accept the
+  license on the model page once and run `hf auth login`.
+- **Runtime:** transformers + bitsandbytes NF4 + PEFT, in process, same pattern
+  (and same venv) as the image backend: the model loads once onto a dedicated
+  worker thread and stays resident (~2.5 GB VRAM for 3B). At Discord-chat
+  message lengths this generates a reply in a couple of seconds; if you ever
+  want more speed, merging the adapter and exporting to GGUF for llama.cpp is
+  the upgrade path, at the cost of an extra conversion step in the pipeline.
+
+### Fine-tuning pipeline
+
+```bash
+# 0. one-time: training deps + HF login for the gated base model
+pip install -r requirements-train.txt
+hf auth login
+
+# 1. pull the server's message history -> data/raw/<guild>/<channel>.jsonl
+#    (re-running resumes incrementally; needs the Message Content intent)
+python tools/collect_history.py --guild <your_guild_id>
+
+# 2. filter + chunk into transcript training samples -> data/sft/
+python tools/build_dataset.py
+
+# 3. QLoRA fine-tune -> models/adapters/friendbot-lora/
+#    (stop the image bot first; training wants the GPU to itself)
+python tools/train_lora.py
+
+# 4. run it
+python -m friendbot2 chat
+```
+
+Each tool is standalone with `--help`. The dataset format is deliberately
+simple — one `{"text": "<transcript chunk>"}` per line — sessions are split on
+4-hour silences, commands/bots/attachment-only messages are filtered out, and
+`personas.json` records who appears often enough to imitate. `data/` and
+`models/` are gitignored: the collected history is your friends' private chat,
+so keep it on this machine and don't commit or upload it.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and fill it in (at minimum `FRIENDBOT_TOKEN`):
@@ -64,8 +127,15 @@ $EDITOR .env
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FRIENDBOT_TOKEN` | — | **Required.** Discord bot token. |
+| `FRIENDBOT_MODE` | `image` | `image` or `chat` (CLI arg overrides). |
 | `FLUX_REPO_PATH` | `../flux` | Path to the flux checkout with `generate.py` + `models/`. |
-| `FRIENDBOT_MODEL` | `sd35` | Model to load: `sd35` or `flux`. |
+| `FRIENDBOT_MODEL` | `sd35` | Diffusion model: `sd35` or `flux`. |
+| `FRIENDBOT_LLM_BASE` | `meta-llama/Llama-3.2-3B` | Chat base model. |
+| `FRIENDBOT_LLM_ADAPTER` | `models/adapters/friendbot-lora` | LoRA adapter path. |
+| `FRIENDBOT_PERSONA` | most active user | Whose style to mimic. |
+| `FRIENDBOT_LLM_4BIT` | `true` | NF4-quantize the LLM (disable for CPU tests). |
+| `FRIENDBOT_LLM_MAX_NEW_TOKENS` / `_TEMPERATURE` / `_TOP_P` / `_CONTEXT_TOKENS` | `120` / `0.9` / `0.95` / `1536` | Sampling and context budget. |
+| `FRIENDBOT_CHAT_CONTEXT` | `25` | Recent messages kept as transcript context. |
 | `FRIENDBOT_PREFIX` | `!` | Prefix for classic text commands. |
 | `FRIENDBOT_GUILD_ID` | — | Guild id for instant slash-command sync (dev). |
 | `FRIENDBOT_CHANNELS` | (all) | Allowed channel ids (comma/space separated). |
@@ -79,23 +149,45 @@ $EDITOR .env
 
 - Invite the bot with the **applications.commands** and **bot** scopes.
 - Under **Bot → Privileged Gateway Intents**, enable **Message Content Intent**
-  (required for the `!` prefix commands; slash commands work without it).
+  (required for `!` prefix commands, chat-mode listening, and history
+  collection; slash commands work without it).
 
 ## Running
 
 ```bash
 # from inside the venv that has both discord.py and the flux deps
-python -m friendbot2
+python -m friendbot2          # image mode
+python -m friendbot2 chat     # chat mode
 ```
 
 Then in Discord:
 
 ```
 /artistic a photorealistic sunset over misty mountains
-!gen a macro photo of a dragonfly
+!gen a macro photo of a dragonfly        (image mode)
+
+@FriendBot2 what do you think?           (chat mode)
+/persona Alice                           (chat mode)
 ```
 
-(`prompt`, `txt2img`, `generate`, `gen`, and `ig` are aliases for the prefix form.)
+(`prompt`, `txt2img`, `generate`, `gen`, and `ig` are aliases for `!artistic`.)
+
+## Repo layout
+
+```
+friendbot2/            the bot
+  __main__.py          entry point: python -m friendbot2 [image|chat]
+  bot.py               FriendBot: intents, mode wiring, slash sync
+  image_generation.py  image mode cog (prompt queue, caps)
+  flux_backend.py      resident diffusion pipeline via ../flux/generate.py
+  chat.py              chat mode cog (transcript context, /persona)
+  llm_backend.py       resident NF4 LLM + LoRA adapter
+  config.py            env-based configuration
+tools/                 offline fine-tuning pipeline (standalone scripts)
+  collect_history.py   Discord -> data/raw/*.jsonl (incremental)
+  build_dataset.py     data/raw -> data/sft (transcript chunks + personas)
+  train_lora.py        QLoRA fine-tune -> models/adapters/
+```
 
 ## License
 

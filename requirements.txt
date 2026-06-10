@@ -1,13 +1,17 @@
-# FriendBot2's own dependencies.
+# FriendBot2's own dependencies (both modes).
 discord.py>=2.4.0
 python-dotenv>=1.0.0
 
-# The image backend imports the local flux/generate.py, which needs torch,
-# diffusers, transformers, bitsandbytes, etc. Those are NOT listed here — install
-# them from the flux repo so the versions match the GPU/CUDA setup there:
+# Chat mode: loading the LoRA adapter on top of the base model.
+peft>=0.15
+
+# Both backends also need the torch/transformers stack. Those are NOT listed
+# here — install them from the flux repo so the versions match the GPU/CUDA
+# setup there:
 #
-#   cd ../flux && bash setup.sh           # creates flux/.venv with the FLUX deps
+#   cd ../flux && bash setup.sh           # creates flux/.venv with torch etc.
 #   source ../flux/.venv/bin/activate
-#   pip install -r requirements.txt       # add discord.py + python-dotenv on top
+#   pip install -r requirements.txt       # add this file on top
 #
+# For fine-tuning, additionally:  pip install -r requirements-train.txt
 # See README.md for details.

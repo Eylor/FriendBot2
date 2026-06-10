@@ -1,0 +1,9 @@
+# Extra dependencies for fine-tuning (tools/train_lora.py).
+peft>=0.15
+trl>=1.0
+datasets>=3.0
+
+# Floors for packages normally provided by the flux setup:
+transformers>=4.51
+bitsandbytes>=0.46
+accelerate>=1.6

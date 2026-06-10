@@ -26,6 +26,10 @@ ENV/
 outputs/
 *.png
 
+# Collected chat history, datasets, and model adapters
+data/
+models/
+
 # Tooling caches
 .mypy_cache/
 .pytest_cache/
